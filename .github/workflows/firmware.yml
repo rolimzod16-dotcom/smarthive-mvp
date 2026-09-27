@@ -2,6 +2,11 @@ name: Build ESP32 firmware
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "firmware/**"
+      - "platformio.ini"
+      - ".github/workflows/firmware.yml"
   push:
     paths:
       - "firmware/**"
@@ -36,4 +41,3 @@ jobs:
           name: smarthive-complete-bin
           path: smarthive-complete.bin
           if-no-files-found: error
-
