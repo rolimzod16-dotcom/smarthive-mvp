@@ -9,7 +9,7 @@
 #include <SPI.h>
 #include <SD.h>
 
-// SmartHive wiring used in this build.
+// SmartHive wiring used in this build. Verified by the CI firmware build.
 static constexpr int PIN_SDA = 21;
 static constexpr int PIN_SCL = 22;
 static constexpr int PIN_GPS_RX = 16; // GPS TX -> ESP RX2
