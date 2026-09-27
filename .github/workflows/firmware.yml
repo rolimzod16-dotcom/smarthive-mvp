@@ -1,0 +1,39 @@
+name: Build ESP32 firmware
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "firmware/**"
+      - "platformio.ini"
+      - ".github/workflows/firmware.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install --disable-pip-version-check platformio
+      - name: Build firmware
+        run: pio run
+      - name: Merge into one phone-flashable binary
+        run: |
+          python "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" \
+            --chip esp32 merge_bin \
+            -o smarthive-complete.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000 .pio/build/esp32dev/bootloader.bin \
+            0x8000 .pio/build/esp32dev/partitions.bin \
+            0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
+            0x10000 .pio/build/esp32dev/firmware.bin
+      - name: Upload phone firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: smarthive-complete-bin
+          path: smarthive-complete.bin
+          if-no-files-found: error
+
