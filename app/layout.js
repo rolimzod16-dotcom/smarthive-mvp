@@ -2,7 +2,7 @@ import './styles.css';
 
 export const metadata = {
   title: 'SmartHive Monitor',
-  description: 'Live telemetry dashboard for the SmartHive MVP',
+  description: 'SmartHive temperature, humidity, sound, passage and location telemetry',
 };
 
 export default function RootLayout({ children }) {
@@ -12,4 +12,3 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
-

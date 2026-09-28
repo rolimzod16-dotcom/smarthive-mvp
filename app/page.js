@@ -69,6 +69,10 @@ export default function Dashboard() {
         <Card label="SHT31" value={yesNo(latest?.sht31Ok)} ok={latest?.sht31Ok !== false} />
         <Card label="microSD" value={yesNo(latest?.microSdOk)} ok={latest?.microSdOk !== false} />
         <Card label="LoRa" value={yesNo(latest?.loraOk)} ok={latest?.loraOk !== false} />
+        <Card label="Микрофон" value={yesNo(latest?.microphoneOk)} ok={latest?.microphoneOk !== false} />
+        <Card label="Уровень звука" value={latest?.soundLevelDbfs} unit="dBFS" ok={latest?.microphoneOk !== false} />
+        <Card label="ИК‑канал A" value={latest?.irBeamACount} unit="срабатываний" />
+        <Card label="ИК‑канал B" value={latest?.irBeamBCount} unit="срабатываний" />
         <Card label="Прошивка" value={latest?.firmware || '—'} />
       </section>
 
@@ -81,17 +85,19 @@ export default function Dashboard() {
         <h2>Последние измерения</h2>
         <div className="tableWrap">
           <table>
-            <thead><tr><th>Время</th><th>°C</th><th>Влажность</th><th>GPS</th><th>Wi‑Fi</th></tr></thead>
+            <thead><tr><th>Время</th><th>°C</th><th>Влажность</th><th>Звук</th><th>ИК A/B</th><th>GPS</th><th>Wi‑Fi</th></tr></thead>
             <tbody>
               {history.length ? history.map((row, index) => (
                 <tr key={`${row.receivedAt}-${index}`}>
                   <td>{new Date(row.receivedAt).toLocaleTimeString('ru-RU')}</td>
                   <td>{row.temperatureC ?? '—'}</td>
                   <td>{row.humidityPct ?? '—'}%</td>
+                  <td>{row.soundLevelDbfs ?? '—'} dBFS</td>
+                  <td>{row.irBeamACount ?? 0}/{row.irBeamBCount ?? 0}</td>
                   <td>{row.gpsValid ? 'OK' : '—'}</td>
                   <td>{row.wifiRssi ?? '—'} dBm</td>
                 </tr>
-              )) : <tr><td colSpan="5">Пока данных нет</td></tr>}
+              )) : <tr><td colSpan="7">Пока данных нет</td></tr>}
             </tbody>
           </table>
         </div>
@@ -99,4 +105,3 @@ export default function Dashboard() {
     </main>
   );
 }
-

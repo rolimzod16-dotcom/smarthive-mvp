@@ -22,9 +22,11 @@ export async function POST(request) {
   const item = {
     ...body,
     deviceId: body.deviceId.slice(0, 64),
+    soundLevelDbfs: Number.isFinite(body.soundLevelDbfs) ? body.soundLevelDbfs : null,
+    irBeamACount: Number.isFinite(body.irBeamACount) ? Math.max(0, Math.trunc(body.irBeamACount)) : 0,
+    irBeamBCount: Number.isFinite(body.irBeamBCount) ? Math.max(0, Math.trunc(body.irBeamBCount)) : 0,
     receivedAt: new Date().toISOString(),
   };
   await saveTelemetry(item);
   return NextResponse.json({ ok: true, receivedAt: item.receivedAt, storage: storageMode() });
 }
-
