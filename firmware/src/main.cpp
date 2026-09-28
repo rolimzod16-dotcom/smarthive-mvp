@@ -54,24 +54,34 @@ char apiUrl[160] = "https://smarthive-mvp.vercel.app/api/telemetry";
 char apiKey[80] = "";
 char deviceId[40] = "smarthive-01";
 
-volatile uint32_t irBeamACount = 0;
-volatile uint32_t irBeamBCount = 0;
-volatile uint32_t lastIrAUs = 0;
-volatile uint32_t lastIrBUs = 0;
+uint32_t irBeamACount = 0;
+uint32_t irBeamBCount = 0;
+int irARaw = HIGH;
+int irBRaw = HIGH;
+int irAStable = HIGH;
+int irBStable = HIGH;
+uint32_t irAChangedMs = 0;
+uint32_t irBChangedMs = 0;
 
-void IRAM_ATTR onIrBeamA() {
-  const uint32_t now = micros();
-  if (now - lastIrAUs > 50000) {
-    irBeamACount++;
-    lastIrAUs = now;
+void pollIrBeams() {
+  const uint32_t now = millis();
+  const int rawA = digitalRead(PIN_IR_A);
+  const int rawB = digitalRead(PIN_IR_B);
+
+  if (rawA != irARaw) {
+    irARaw = rawA;
+    irAChangedMs = now;
+  } else if (rawA != irAStable && now - irAChangedMs >= 30) {
+    irAStable = rawA;
+    if (irAStable == LOW) irBeamACount++;
   }
-}
 
-void IRAM_ATTR onIrBeamB() {
-  const uint32_t now = micros();
-  if (now - lastIrBUs > 50000) {
-    irBeamBCount++;
-    lastIrBUs = now;
+  if (rawB != irBRaw) {
+    irBRaw = rawB;
+    irBChangedMs = now;
+  } else if (rawB != irBStable && now - irBChangedMs >= 30) {
+    irBStable = rawB;
+    if (irBStable == LOW) irBeamBCount++;
   }
 }
 
@@ -166,12 +176,8 @@ String buildPayload() {
   const double lng = gpsValid ? gps.location.lng() : 0.0;
   const int satellites = gps.satellites.isValid() ? gps.satellites.value() : 0;
   const float soundDbfs = readSoundDbfs();
-  uint32_t beamA;
-  uint32_t beamB;
-  noInterrupts();
-  beamA = irBeamACount;
-  beamB = irBeamBCount;
-  interrupts();
+  const uint32_t beamA = irBeamACount;
+  const uint32_t beamB = irBeamBCount;
 
   appendCsv(temperature, humidity, lat, lng, gpsValid, satellites, soundDbfs, beamA, beamB);
 
@@ -194,7 +200,7 @@ String buildPayload() {
   payload += "\"irBeamBCount\":" + String(beamB) + ",";
   payload += "\"irBeamAActive\":" + String(digitalRead(PIN_IR_A) == LOW ? "true" : "false") + ",";
   payload += "\"irBeamBActive\":" + String(digitalRead(PIN_IR_B) == LOW ? "true" : "false") + ",";
-  payload += "\"firmware\":\"0.3.0\"";
+  payload += "\"firmware\":\"0.3.1\"";
   payload += "}";
   return payload;
 }
@@ -255,7 +261,7 @@ void connectWifi() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("SmartHive firmware 0.3.0 booting");
+  Serial.println("SmartHive firmware 0.3.1 booting");
   Wire.begin(PIN_SDA, PIN_SCL);
   shtOk = sht31.begin(0x44);
   gpsSerial.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
@@ -267,8 +273,8 @@ void setup() {
   micOk = setupMicrophone();
   pinMode(PIN_IR_A, INPUT);
   pinMode(PIN_IR_B, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIN_IR_A), onIrBeamA, FALLING);
-  attachInterrupt(digitalPinToInterrupt(PIN_IR_B), onIrBeamB, FALLING);
+  irARaw = irAStable = digitalRead(PIN_IR_A);
+  irBRaw = irBStable = digitalRead(PIN_IR_B);
   connectWifi();
   sendTelemetry();
   lastSend = millis();
@@ -276,6 +282,7 @@ void setup() {
 
 void loop() {
   while (gpsSerial.available()) gps.encode(gpsSerial.read());
+  pollIrBeams();
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry >= WIFI_RETRY_MS) {
     lastWifiRetry = millis();
     WiFi.reconnect();
