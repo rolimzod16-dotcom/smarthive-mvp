@@ -10,6 +10,9 @@
 #include <SPI.h>
 #include <SD.h>
 #include <driver/i2s.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <HX711.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -31,6 +34,9 @@ static constexpr int PIN_MIC_WS = 33;
 static constexpr int PIN_MIC_SD = 34;
 static constexpr int PIN_IR_A = 35;
 static constexpr int PIN_IR_B = 36;
+static constexpr int PIN_DS18B20 = 4;
+static constexpr int PIN_SCALE_DOUT = 13;
+static constexpr int PIN_SCALE_SCK = 14;
 
 static constexpr uint32_t SEND_INTERVAL_MS = 30000;
 static constexpr uint32_t WIFI_RETRY_MS = 10000;
@@ -43,11 +49,20 @@ TinyGPSPlus gps;
 HardwareSerial gpsSerial(2);
 HardwareSerial loraSerial(1);
 Preferences prefs;
+OneWire oneWire(PIN_DS18B20);
+DallasTemperature ds18b20(&oneWire);
+HX711 scale;
 
 bool shtOk = false;
 bool sdOk = false;
 bool loraOk = false;
 bool micOk = false;
+bool ds18b20Ok = false;
+bool scaleOk = false;
+bool scaleCalibrated = false;
+float scaleCalibration = 0.0f;
+long scaleTareOffset = 0;
+String serialCommand;
 unsigned long lastSend = 0;
 unsigned long lastWifiRetry = 0;
 char apiUrl[160] = "https://smarthive-mvp.vercel.app/api/telemetry";
@@ -82,6 +97,50 @@ void pollIrBeams() {
   } else if (rawB != irBStable && now - irBChangedMs >= 30) {
     irBStable = rawB;
     if (irBStable == LOW) irBeamBCount++;
+  }
+}
+
+void handleScaleCommand(const String &command) {
+  if (command == "SCALE?") {
+    Serial.printf("HX711 ready=%d calibrated=%d tare=%ld factor=%.6f\n",
+                  scale.wait_ready_timeout(150) ? 1 : 0, scaleCalibrated ? 1 : 0,
+                  scaleTareOffset, scaleCalibration);
+    return;
+  }
+  if (command == "TARE") {
+    if (!scale.wait_ready_timeout(1000)) {
+      Serial.println("HX711 not ready; tare cancelled");
+      return;
+    }
+    scaleTareOffset = scale.read_average(10);
+    prefs.putLong("scaleTare", scaleTareOffset);
+    Serial.printf("Tare saved: %ld\n", scaleTareOffset);
+    return;
+  }
+  if (command.startsWith("CAL ")) {
+    const float knownKg = command.substring(4).toFloat();
+    if (knownKg <= 0.0f || !scale.wait_ready_timeout(1000)) {
+      Serial.println("Use CAL <known_weight_kg> while that weight is on the platform");
+      return;
+    }
+    const long loadedRaw = scale.read_average(10);
+    scaleCalibration = static_cast<float>(loadedRaw - scaleTareOffset) / knownKg;
+    scaleCalibrated = fabs(scaleCalibration) > 0.000001f;
+    if (scaleCalibrated) prefs.putFloat("scaleFactor", scaleCalibration);
+    Serial.printf("Calibration saved: %.6f counts/kg\n", scaleCalibration);
+  }
+}
+
+void pollSerialCommands() {
+  while (Serial.available()) {
+    const char c = static_cast<char>(Serial.read());
+    if (c == '\n' || c == '\r') {
+      serialCommand.trim();
+      if (serialCommand.length()) handleScaleCommand(serialCommand);
+      serialCommand = "";
+    } else if (serialCommand.length() < 63) {
+      serialCommand += c;
+    }
   }
 }
 
@@ -153,24 +212,32 @@ bool testLoRa() {
   return false;
 }
 
-void appendCsv(float temperature, float humidity, double lat, double lng, bool gpsValid,
-               int satellites, float soundDbfs, uint32_t beamA, uint32_t beamB) {
+void appendCsv(float temperature, float probeTemperature, float humidity, double lat, double lng,
+               bool gpsValid, int satellites, float soundDbfs, uint32_t beamA,
+               uint32_t beamB, long scaleRaw, float weightKg) {
   if (!sdOk) return;
   File f = SD.open("/telemetry.csv", FILE_APPEND);
   if (!f) return;
   if (f.size() == 0) {
-    f.println("uptime_ms,temperature_c,humidity_pct,latitude,longitude,gps_valid,satellites,wifi_rssi,lora_ok,mic_ok,sound_dbfs,ir_a_count,ir_b_count");
+    f.println("uptime_ms,temperature_c,probe_temperature_c,humidity_pct,latitude,longitude,gps_valid,satellites,wifi_rssi,lora_ok,mic_ok,sound_dbfs,ir_a_count,ir_b_count,scale_ok,scale_raw,weight_kg");
   }
-  f.printf("%lu,%.2f,%.2f,%.6f,%.6f,%d,%d,%d,%d,%d,%.2f,%lu,%lu\n",
-           millis(), temperature, humidity, lat, lng, gpsValid ? 1 : 0, satellites,
+  f.printf("%lu,%.2f,%.2f,%.2f,%.6f,%.6f,%d,%d,%d,%d,%d,%.2f,%lu,%lu,%d,%ld,%.3f\n",
+           millis(), temperature, probeTemperature, humidity, lat, lng, gpsValid ? 1 : 0, satellites,
            WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -127, loraOk ? 1 : 0,
-           micOk ? 1 : 0, soundDbfs, static_cast<unsigned long>(beamA), static_cast<unsigned long>(beamB));
+           micOk ? 1 : 0, soundDbfs, static_cast<unsigned long>(beamA),
+           static_cast<unsigned long>(beamB), scaleOk ? 1 : 0, scaleRaw, weightKg);
   f.close();
 }
 
 String buildPayload() {
   const float temperature = shtOk ? sht31.readTemperature() : NAN;
   const float humidity = shtOk ? sht31.readHumidity() : NAN;
+  float probeTemperature = NAN;
+  if (ds18b20Ok) {
+    ds18b20.requestTemperatures();
+    const float value = ds18b20.getTempCByIndex(0);
+    if (value > -126.0f && value < 125.0f) probeTemperature = value;
+  }
   const bool gpsValid = gps.location.isValid() && gps.location.age() < 10000;
   const double lat = gpsValid ? gps.location.lat() : 0.0;
   const double lng = gpsValid ? gps.location.lng() : 0.0;
@@ -178,14 +245,25 @@ String buildPayload() {
   const float soundDbfs = readSoundDbfs();
   const uint32_t beamA = irBeamACount;
   const uint32_t beamB = irBeamBCount;
+  long scaleRaw = 0;
+  float weightKg = NAN;
+  scaleOk = scale.wait_ready_timeout(150);
+  if (scaleOk) {
+    scaleRaw = scale.read_average(3);
+    if (scaleCalibrated && fabs(scaleCalibration) > 0.000001f) {
+      weightKg = static_cast<float>(scaleRaw - scaleTareOffset) / scaleCalibration;
+    }
+  }
 
-  appendCsv(temperature, humidity, lat, lng, gpsValid, satellites, soundDbfs, beamA, beamB);
+  appendCsv(temperature, probeTemperature, humidity, lat, lng, gpsValid, satellites,
+            soundDbfs, beamA, beamB, scaleRaw, weightKg);
 
   String payload = "{";
   payload += "\"deviceId\":\"" + jsonEscape(deviceId) + "\",";
   payload += "\"uptimeMs\":" + String(millis()) + ",";
   payload += "\"temperatureC\":" + (isnan(temperature) ? String("null") : String(temperature, 2)) + ",";
   payload += "\"humidityPct\":" + (isnan(humidity) ? String("null") : String(humidity, 2)) + ",";
+  payload += "\"probeTemperatureC\":" + (isnan(probeTemperature) ? String("null") : String(probeTemperature, 2)) + ",";
   payload += "\"latitude\":" + (gpsValid ? String(lat, 6) : String("null")) + ",";
   payload += "\"longitude\":" + (gpsValid ? String(lng, 6) : String("null")) + ",";
   payload += "\"gpsValid\":" + String(gpsValid ? "true" : "false") + ",";
@@ -200,7 +278,12 @@ String buildPayload() {
   payload += "\"irBeamBCount\":" + String(beamB) + ",";
   payload += "\"irBeamAActive\":" + String(digitalRead(PIN_IR_A) == LOW ? "true" : "false") + ",";
   payload += "\"irBeamBActive\":" + String(digitalRead(PIN_IR_B) == LOW ? "true" : "false") + ",";
-  payload += "\"firmware\":\"0.3.1\"";
+  payload += "\"ds18b20Ok\":" + String(ds18b20Ok ? "true" : "false") + ",";
+  payload += "\"scaleOk\":" + String(scaleOk ? "true" : "false") + ",";
+  payload += "\"scaleCalibrated\":" + String(scaleCalibrated ? "true" : "false") + ",";
+  payload += "\"scaleRaw\":" + (scaleOk ? String(scaleRaw) : String("null")) + ",";
+  payload += "\"weightKg\":" + (isnan(weightKg) ? String("null") : String(weightKg, 3)) + ",";
+  payload += "\"firmware\":\"0.4.0-factory\"";
   payload += "}";
   return payload;
 }
@@ -261,16 +344,34 @@ void connectWifi() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("SmartHive firmware 0.3.1 booting");
+  Serial.println("SmartHive firmware 0.4.0-factory booting");
   Wire.begin(PIN_SDA, PIN_SCL);
   shtOk = sht31.begin(0x44);
+  Serial.printf("SHT3x: %s\n", shtOk ? "OK" : "not found");
+  ds18b20.begin();
+  ds18b20.setWaitForConversion(true);
+  ds18b20Ok = ds18b20.getDeviceCount() > 0;
+  Serial.printf("DS18B20: %s\n", ds18b20Ok ? "OK" : "not found");
+  scale.begin(PIN_SCALE_DOUT, PIN_SCALE_SCK);
+  prefs.begin("smarthive", false);
+  scaleCalibration = prefs.getFloat("scaleFactor", 0.0f);
+  scaleTareOffset = prefs.getLong("scaleTare", 0);
+  scaleCalibrated = fabs(scaleCalibration) > 0.000001f;
+  scaleOk = scale.wait_ready_timeout(150);
+  Serial.printf("HX711: %s (%s)\n", scaleOk ? "OK" : "not found",
+                scaleCalibrated ? "calibrated" : "not calibrated");
+  Serial.println("Scale commands: SCALE?, TARE, CAL <known_weight_kg>");
   gpsSerial.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+  Serial.println("GPS UART: ready");
   pinMode(PIN_LORA_RST, OUTPUT);
   digitalWrite(PIN_LORA_RST, HIGH);
   loraSerial.begin(115200, SERIAL_8N1, PIN_LORA_RX, PIN_LORA_TX);
+  Serial.println("LoRa UART: ready");
   SPI.begin(18, 19, 23, PIN_SD_CS);
   sdOk = SD.begin(PIN_SD_CS, SPI);
+  Serial.printf("microSD: %s\n", sdOk ? "OK" : "not found");
   micOk = setupMicrophone();
+  Serial.printf("Microphone: %s\n", micOk ? "OK" : "not found");
   pinMode(PIN_IR_A, INPUT);
   pinMode(PIN_IR_B, INPUT);
   irARaw = irAStable = digitalRead(PIN_IR_A);
@@ -282,6 +383,7 @@ void setup() {
 
 void loop() {
   while (gpsSerial.available()) gps.encode(gpsSerial.read());
+  pollSerialCommands();
   pollIrBeams();
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry >= WIFI_RETRY_MS) {
     lastWifiRetry = millis();

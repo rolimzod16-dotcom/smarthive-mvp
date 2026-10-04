@@ -29,15 +29,14 @@ jobs:
         run: |
           python "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" \
             --chip esp32 merge_bin \
-            -o smarthive-complete.bin \
+            -o smarthive-full-0.4.0-factory.bin \
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 .pio/build/esp32dev/bootloader.bin \
             0x8000 .pio/build/esp32dev/partitions.bin \
-            0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
             0x10000 .pio/build/esp32dev/firmware.bin
       - name: Upload phone firmware
         uses: actions/upload-artifact@v4
         with:
-          name: smarthive-complete-bin
-          path: smarthive-complete.bin
+          name: smarthive-full-0.4.0-factory
+          path: smarthive-full-0.4.0-factory.bin
           if-no-files-found: error

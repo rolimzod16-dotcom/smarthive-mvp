@@ -64,6 +64,11 @@ export default function Dashboard() {
       <section className="grid">
         <Card label="Температура" value={latest?.temperatureC} unit="°C" ok={latest?.sht31Ok !== false} />
         <Card label="Влажность" value={latest?.humidityPct} unit="%" ok={latest?.sht31Ok !== false} />
+        <Card label="Температура щупа" value={latest?.probeTemperatureC} unit="°C" ok={latest?.ds18b20Ok !== false} />
+        <Card label="DS18B20" value={yesNo(latest?.ds18b20Ok)} ok={latest?.ds18b20Ok !== false} />
+        <Card label="Вес" value={latest?.weightKg} unit="кг" ok={latest?.scaleOk !== false} />
+        <Card label="HX711" value={yesNo(latest?.scaleOk)} ok={latest?.scaleOk !== false} />
+        <Card label="Калибровка весов" value={latest?.scaleCalibrated ? 'Готова' : 'Требуется'} ok={latest?.scaleCalibrated !== false} />
         <Card label="Спутники GPS" value={latest?.satellites} ok={latest?.gpsValid !== false} />
         <Card label="Сигнал Wi‑Fi" value={latest?.wifiRssi} unit="dBm" />
         <Card label="SHT31" value={yesNo(latest?.sht31Ok)} ok={latest?.sht31Ok !== false} />
@@ -85,19 +90,21 @@ export default function Dashboard() {
         <h2>Последние измерения</h2>
         <div className="tableWrap">
           <table>
-            <thead><tr><th>Время</th><th>°C</th><th>Влажность</th><th>Звук</th><th>ИК A/B</th><th>GPS</th><th>Wi‑Fi</th></tr></thead>
+            <thead><tr><th>Время</th><th>°C</th><th>Щуп</th><th>Вес</th><th>Влажность</th><th>Звук</th><th>ИК A/B</th><th>GPS</th><th>Wi‑Fi</th></tr></thead>
             <tbody>
               {history.length ? history.map((row, index) => (
                 <tr key={`${row.receivedAt}-${index}`}>
                   <td>{new Date(row.receivedAt).toLocaleTimeString('ru-RU')}</td>
                   <td>{row.temperatureC ?? '—'}</td>
+                  <td>{row.probeTemperatureC ?? '—'}°C</td>
+                  <td>{row.weightKg ?? '—'} кг</td>
                   <td>{row.humidityPct ?? '—'}%</td>
                   <td>{row.soundLevelDbfs ?? '—'} dBFS</td>
                   <td>{row.irBeamACount ?? 0}/{row.irBeamBCount ?? 0}</td>
                   <td>{row.gpsValid ? 'OK' : '—'}</td>
                   <td>{row.wifiRssi ?? '—'} dBm</td>
                 </tr>
-              )) : <tr><td colSpan="7">Пока данных нет</td></tr>}
+              )) : <tr><td colSpan="9">Пока данных нет</td></tr>}
             </tbody>
           </table>
         </div>
